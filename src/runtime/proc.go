@@ -1611,6 +1611,8 @@ func stopTheWorldWithSema(reason stwReason) worldStop {
 			pp.syscalltick++
 			pp.gcStopTime = nanotime()
 			sched.stopwait--
+			// The P is no longer in _Psyscall, but the G still is.
+			atomic.Xadd(&sched.nGsyscallNoP, +1)
 		}
 	}
 	if trace.ok() {
@@ -2125,6 +2127,8 @@ func forEachPInternal(fn func(*p)) {
 				traceRelease(trace)
 			}
 			p2.syscalltick++
+			// The P is no longer in _Psyscall, but the G still is.
+			atomic.Xadd(&sched.nGsyscallNoP, +1)
 			handoffp(p2)
 		} else if trace.ok() {
 			traceRelease(trace)
@@ -2401,6 +2405,8 @@ func needm(signal bool) {
 		}
 	}
 	mp.isExtraInSig = signal
+	atomic.Xadd(&sched.nGsyscallNoP, +1)
+	sched.ngsys.Add(-1)
 }
 
 // Acquire an extra m and bind it to the C thread when a pthread key has been created.
@@ -2527,7 +2533,8 @@ func dropm() {
 	// Return mp.curg to dead state.
 	casgstatus(mp.curg, _Gsyscall, _Gdead)
 	mp.curg.preemptStop = false
-	sched.ngsys.Add(1)
+	atomic.Xadd(&sched.nGsyscallNoP, -1)
+	sched.ngsys.Add(-1)
 
 	if !mp.isExtraInSig {
 		if trace.ok() {
@@ -4599,6 +4606,8 @@ func entersyscall_gcwait() {
 		if sched.stopwait--; sched.stopwait == 0 {
 			notewakeup(&sched.stopnote)
 		}
+		// The P is no longer in _Psyscall, but the G still is.
+		atomic.Xadd(&sched.nGsyscallNoP, +1)
 	} else if trace.ok() {
 		traceRelease(trace)
 	}
@@ -4643,6 +4652,9 @@ func entersyscallblock() {
 			throw("entersyscallblock")
 		})
 	}
+	// This puts the G into _Gsyscall, but the P will never enter
+	// _Psyscall, so increment nGsyscallNoP.
+	atomic.Xadd(&sched.nGsyscallNoP, +1)
 	casgstatus(gp, _Grunning, _Gsyscall)
 	if gp.syscallsp < gp.stack.lo || gp.stack.hi < gp.syscallsp {
 		systemstack(func() {
@@ -4786,6 +4798,10 @@ func exitsyscallfast(oldp *p) bool {
 		return false
 	}
 
+	// Any path below that returns true *without* transitioning a
+	// P out of _Psyscall must decrement sched.nGsyscallNoP, since
+	// returning true will transition the G out of _Gsyscall.
+
 	// Try to re-acquire the last P.
 	trace := traceAcquire()
 	if oldp != nil && oldp.status == _Psyscall && atomic.Cas(&oldp.status, _Psyscall, _Pidle) {
@@ -4846,6 +4862,7 @@ func exitsyscallfast_pidle() bool {
 	}
 	unlock(&sched.lock)
 	if pp != nil {
+		atomic.Xadd(&sched.nGsyscallNoP, -1)
 		acquirep(pp)
 		return true
 	}
@@ -4859,6 +4876,7 @@ func exitsyscallfast_pidle() bool {
 //
 //go:nowritebarrierrec
 func exitsyscall0(gp *g) {
+	atomic.Xadd(&sched.nGsyscallNoP, -1)
 	var trace traceLocker
 	traceExitingSyscall()
 	trace = traceAcquire()
@@ -6325,6 +6343,7 @@ func retake(now int64) uint32 {
 				}
 				n++
 				pp.syscalltick++
+				atomic.Xadd(&sched.nGsyscallNoP, +1)
 				handoffp(pp)
 			} else if trace.ok() {
 				traceRelease(trace)

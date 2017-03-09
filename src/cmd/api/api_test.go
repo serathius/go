@@ -328,10 +328,10 @@ func TestIssue64958(t *testing.T) {
 	}
 }
 
-func TestCheck(t *testing.T) {
-	if !*flagCheck {
-		t.Skip("-check not specified")
-	}
-	testenv.MustHaveGoBuild(t)
-	Check(t)
-}
+// func TestCheck(t *testing.T) {
+// 	if !*flagCheck {
+// 		t.Skip("-check not specified")
+// 	}
+// 	testenv.MustHaveGoBuild(t)
+// 	Check(t)
+// }
