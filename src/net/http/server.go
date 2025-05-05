@@ -2032,7 +2032,7 @@ func (c *conn) serve(ctx context.Context) {
 			// If we read any bytes off the wire, we're active.
 			c.setState(c.rwc, StateActive, runHooks)
 		}
-		if c.server.shuttingDown() {
+		if c.server.shuttingDown() || c.server.shedding() {
 			return
 		}
 		if err != nil {
@@ -3094,6 +3094,7 @@ type Server struct {
 	Protocols *Protocols
 
 	inShutdown atomic.Bool // true when server is in shutdown
+	inShedding atomic.Bool // true when server is shedding load
 
 	disableKeepAlives atomic.Bool
 	nextProtoOnce     sync.Once // guards setupHTTP2_* init
@@ -3470,6 +3471,22 @@ func (s *Server) Serve(l net.Listener) error {
 			}
 			return err
 		}
+		if s.inShedding.Load() {
+			err := rw.Close()
+			if err != nil {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				s.logf("http: Close error: %v; retrying in %v", err, tempDelay)
+				time.Sleep(tempDelay)
+				continue
+			}
+		}
 		connCtx := ctx
 		if cc := s.ConnContext; cc != nil {
 			connCtx = cc(connCtx, rw)
@@ -3643,6 +3660,14 @@ func (s *Server) doKeepAlives() bool {
 
 func (s *Server) shuttingDown() bool {
 	return s.inShutdown.Load()
+}
+
+func (s *Server) shedding() bool {
+	return s.inShedding.Load()
+}
+
+func (s *Server) SetShed(v bool) {
+	s.inShedding.Store(v)
 }
 
 // SetKeepAlivesEnabled controls whether HTTP keep-alives are enabled.

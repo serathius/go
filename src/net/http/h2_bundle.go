@@ -6029,6 +6029,9 @@ func (sc *http2serverConn) processHeaders(f *http2MetaHeadersFrame) error {
 		// runtime.
 		return sc.countError("over_max_streams_race", http2streamError(id, http2ErrCodeRefusedStream))
 	}
+	if sc.hs.shedding() {
+		return sc.countError("shedding", http2streamError(id, http2ErrCodeProtocol))
+	}
 
 	initialState := http2stateOpen
 	if f.StreamEnded() {
